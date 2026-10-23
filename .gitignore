@@ -10,3 +10,9 @@ samconfig.toml
 .pytest_cache/
 .venv/
 venv/
+
+# Kiro settings locks and local assets
+.kiro/settings/*.lock
+.kiro/*.png
+.kiro/*.jpg
+.kiro/*.jpeg

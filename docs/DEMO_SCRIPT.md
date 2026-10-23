@@ -1,81 +1,116 @@
 # RingArchive — 2.5-Minute Demo Script
 
-**Audience:** Hackathon judges  
-**Prereqs:** `.env` loaded, SAM stack deployed, Ring simulator linked, DynamoDB + S3 empty.
+**Audience:** hackathon judges  
+**Goal:** show Ring API → Lambda pipeline → S3/DynamoDB → dashboard UI end to end
 
 ---
 
-## Act 1 — Trigger a simulator event (0:00 – 0:30)
+## Setup (before you go live)
 
-1. Open the Ring Developer Portal → Staging → Simulator.
-2. Click **Trigger motion event** on the virtual doorbell.
-3. *Narrate:* "The simulator fires a `motion_detected` webhook and records a clip on Ring's servers — just like a real doorbell."
+1. `.env` has `RING_ACCESS_TOKEN` (Playground token), `ARCHIVE_BUCKET`, `DYNAMO_TABLE`, `AWS_REGION=eu-west-2`
+2. AWS credentials configured (`aws configure`)
+3. S3 bucket and DynamoDB table already created
+4. Terminal open in `D:\ringarchive`
 
 ---
 
-## Act 2 — Run one archive pass (0:30 – 1:15)
+## Script
 
-In a terminal:
+### 0:00 — Intro (15 s)
+
+> "RingArchive is a personal backup service for Ring doorbell clips.
+> It uses the official Ring API to pull events, stores each clip in
+> your own private S3 bucket, and tracks them in DynamoDB — so you
+> own your footage forever."
+
+### 0:15 — Show the Ring Playground event (20 s)
+
+Open [developer.amazon.com/api/ring](https://developer.amazon.com/api/ring).
+
+> "Here's the Ring Developer Playground. I'll trigger a doorbell event."
+
+Click **Ring doorbell** or **Trigger motion**.
+
+### 0:35 — Run the archive pass (30 s)
 
 ```bash
 python -m ringarchive.run_once
 ```
 
-Watch the output:
-
+Expected output:
 ```
 INFO Found 1 device(s)
-INFO Uploading 1234567 bytes to s3://ringarchive-.../ava1.ring.device.XXX/2026/10/23/<event_id>.mp4
-INFO Uploaded s3://ringarchive-.../<event_id>.mp4
+=== RingArchive — single run ===
 Result: archived=1  skipped=0  errors=0
 ```
 
-*Narrate:* "The Lambda calls `GET /v1/history/devices/{id}/events`, finds the new event, calls `POST /v1/devices/{id}/media/video/download`, downloads the MP4, and stores it in our private S3 bucket."
+> "One new clip archived. Skipped means it was already stored — the
+> DynamoDB dedupe table prevents double-archiving."
 
----
-
-## Act 3 — Verify S3 and DynamoDB (1:15 – 1:50)
-
-Open the AWS Console:
-
-- **S3:** Navigate to the bucket → confirm the `<device_id>/2026/10/23/<event_id>.mp4` object.
-- **DynamoDB:** Open the `RingArchiveEvents` table → confirm one row with `event_id`, `archived_at`, `s3_key`.
-
-*Narrate:* "The DynamoDB record prevents the same clip being downloaded twice — our dedupe guard."
-
----
-
-## Act 4 — List clips with presigned URLs (1:50 – 2:15)
-
+Run again immediately:
 ```bash
-python -m ringarchive.list_clips
+python -m ringarchive.run_once
 ```
-
-Output:
-
-```
-Event ID                                       Archived At                 Summary
-ava1.ring.device.XXX_motion_...                2026-10-23T17:35:00+00:00   (no summary)
-  https://ringarchive-....s3.eu-west-2.amazonaws.com/...?X-Amz-...
-```
-
-Paste the URL in a browser — the MP4 plays directly.
-
----
-
-## Act 5 — Trigger again to show dedupe (2:15 – 2:30)
-
-Run `python -m ringarchive.run_once` a second time.
 
 ```
 Result: archived=0  skipped=1  errors=0
 ```
 
-*Narrate:* "Same event, already in DynamoDB — skipped. Zero duplicate downloads."
+> "Same clip, skipped. Exactly once, guaranteed."
+
+### 1:05 — Show the dashboard (45 s)
+
+```bash
+python -m ringarchive.ui
+```
+
+Open `http://localhost:5000`.
+
+> "This is the archive dashboard. It shows both live Ring API events
+> and what's been archived to S3 in one unified table."
+
+Point out:
+- **Device badge** (purple) — which Ring device
+- **Archived / Event only** status badges
+- **Filter dropdowns** — by device and event type
+- Click a row → **video viewer modal** opens
+
+> "Click any row to inspect the clip. If the S3 URL resolves, it
+> plays inline. Export buttons let you save to disk, Dropbox, or
+> Google Drive — individually or in bulk."
+
+### 1:50 — Show SAM template (20 s)
+
+Open `template.yaml` briefly.
+
+> "The production deployment is a SAM stack — Lambda polling every
+> 15 minutes via EventBridge, private S3 with versioning and
+> AES-256 encryption, DynamoDB on-demand, and Ring credentials
+> stored in Secrets Manager. One command to deploy."
+
+```bash
+sam build && sam deploy --guided
+```
+
+### 2:10 — Wrap up (20 s)
+
+> "RingArchive was built in one day during the hackathon using Kiro.
+> Kiro wrote the Ring client against the official Amazon Vision API,
+> the SAM infrastructure, the dedupe logic and the dashboard — all
+> from the spec in .kiro/specs. The Ring App Store Knowledge MCP
+> helped verify the correct API endpoints."
+
+> "MIT licensed, no unofficial libraries, no hardcoded secrets."
 
 ---
 
-## Wrap-up (2:30)
+## Fallback (if Playground token has expired)
 
-"RingArchive: Ring official API → Lambda → private S3 → Glacier.  
-Your clips, your storage, always yours."
+Show the 6 seeded events in the dashboard — the UI still demonstrates:
+- Unified event+clip table
+- Device filter
+- Viewer modal with the "Playground doesn't serve MP4s" message
+- Export buttons
+- Bulk select and download
+
+The pipeline is correct; the Playground simply doesn't return MP4 bytes.

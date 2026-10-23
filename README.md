@@ -1,116 +1,158 @@
 # RingArchive
 
-A personal backup service that copies Ring doorbell event clips into your own private AWS S3 bucket.  
-Built for the Amazon **"Build, Ship, Shape"** hackathon — Ring track + AWS Builder mini challenge.
+**Automatically back up your Ring doorbell clips to your own private AWS storage.**
+
+RingArchive connects to the official Ring API (`api.amazonvision.com`), pulls new doorbell event clips, stores each one in a private encrypted S3 bucket, and tracks them in DynamoDB — so you own your footage forever, not just for 60 days.
 
 ---
 
-## What it does
+## Features
 
-Every 15 minutes an AWS Lambda polls the official **Ring Partner API** (`api.amazonvision.com`) for new motion/doorbell events on every linked device.  
-New clips are downloaded as MP4 and stored at:
-
-```
-s3://<bucket>/<device_id>/<YYYY>/<MM>/<DD>/<event_id>.mp4
-```
-
-DynamoDB records every archived event so the same clip is never downloaded twice.  
-After 90 days, clips are automatically moved to S3 Glacier.  
-Optionally, Amazon Bedrock (Claude Haiku) writes a one-line summary per clip stored in DynamoDB.
+- **Official Ring API** — uses `api.amazonvision.com` (`GET /v1/history/devices/{id}/events`, `POST /v1/devices/{id}/media/video/download`), not the unofficial community library
+- **Ring Developer Playground** — works with the simulator for development and testing
+- **Private S3 storage** — AES-256 encrypted, versioned, public access blocked, auto-transitions to Glacier after 90 days
+- **DynamoDB dedupe** — conditional writes ensure each clip is archived exactly once, even across concurrent Lambda runs
+- **AWS Lambda + EventBridge** — polls Ring every 15 minutes automatically via AWS SAM
+- **Dashboard UI** — Flask web app with unified event+clip table, inline video player, export to disk / Dropbox / Google Drive, bulk select, device and event-type filters
+- **AWS Secrets Manager** — Ring credentials stored securely; tokens auto-refreshed and persisted
+- **Optional Bedrock summaries** — Claude Haiku writes a one-line description per clip (set `BEDROCK_SUMMARY_ENABLED=true`)
+- **MIT licensed**
 
 ---
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    EB[EventBridge\nevery 15 min] --> L[Lambda\nringarchive]
-    SM[Secrets Manager\nRing tokens] <--> L
-    RA[Ring API\napi.amazonvision.com] --> L
-    L --> S3[S3 bucket\nversioned + encrypted]
-    L <--> DDB[DynamoDB\ndedupe table]
-    S3 --> GL[Glacier\nafter 90 days]
-    L -.->|optional| BR[Bedrock\nClaude Haiku summary]
+graph TD
+    Ring[Ring API<br/>api.amazonvision.com] -->|GET events| Lambda
+    Lambda -->|POST download| Ring
+    Lambda -->|PUT object| S3[(S3 Bucket<br/>encrypted · versioned<br/>Glacier@90d)]
+    Lambda -->|conditional put| DDB[(DynamoDB<br/>dedupe table)]
+    Lambda -->|optional| Bedrock[Amazon Bedrock<br/>Claude Haiku]
+    EB[EventBridge<br/>every 15 min] -->|schedule| Lambda
+    SM[Secrets Manager] -->|Ring tokens| Lambda
+    UI[Flask UI<br/>localhost:5000] -->|list_recent| DDB
+    UI -->|presigned URL| S3
+    UI -->|list events| Ring
 ```
 
 ---
 
 ## Prerequisites
 
-| Requirement | Notes |
-|---|---|
-| Ring Developer account | [developer.amazon.com/ring](https://developer.amazon.com/ring/console/apps) — create an app, get `client_id`, `client_secret` |
-| Ring Simulator or real device | Simulator available in the Ring Dev Portal staging environment |
-| AWS account | IAM user / role with S3, DynamoDB, Lambda, SAM, SecretsManager permissions |
-| Python 3.12 | `python --version` |
-| AWS SAM CLI | `sam --version` |
+- Python 3.12+
+- AWS account with permissions for S3, DynamoDB, Lambda, EventBridge, Secrets Manager (and optionally Bedrock)
+- AWS SAM CLI (`pip install aws-sam-cli`) for deploy
+- Ring Developer account at [developer.amazon.com/api/ring](https://developer.amazon.com/api/ring)
 
 ---
 
 ## Setup
 
-### 1 — Get Ring credentials
+### 1. Ring credentials
 
-1. Log in to the Ring Developer Portal and create an app.
-2. Note your **Client ID**, **Client Secret**, and **HMAC Key**.
-3. In the staging environment, link the simulator account.  
-   This gives you an **access_token** and **refresh_token** (the lambda refreshes them automatically).
+Log in to the [Ring Developer Portal](https://developer.amazon.com/api/ring) and copy your **Playground access token**.
 
-### 2 — Configure environment
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
-# Fill in RING_CLIENT_ID, RING_CLIENT_SECRET, RING_ACCESS_TOKEN, RING_REFRESH_TOKEN
-# Fill in ARCHIVE_BUCKET, DYNAMO_TABLE, AWS_REGION
+# Edit .env — set RING_ACCESS_TOKEN, ARCHIVE_BUCKET, DYNAMO_TABLE, AWS_REGION
 ```
 
-### 3 — Install Python dependencies (local dev)
+### 3. AWS credentials
 
 ```bash
-python -m pip install -r requirements-dev.txt
+aws configure   # region: eu-west-2
+```
+
+### 4. Install dependencies
+
+```bash
+pip install -r requirements.txt
 pip install -e .
 ```
 
-### 4 — Run tests
+### 5. Create AWS resources (one-time)
 
 ```bash
-pytest tests/ -v
+aws s3api create-bucket --bucket <ARCHIVE_BUCKET> --region eu-west-2 \
+    --create-bucket-configuration LocationConstraint=eu-west-2
+aws s3api put-public-access-block --bucket <ARCHIVE_BUCKET> \
+    --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws dynamodb create-table --table-name RingArchiveEvents \
+    --attribute-definitions AttributeName=event_id,AttributeType=S \
+    --key-schema AttributeName=event_id,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST --region eu-west-2
 ```
 
-### 5 — Run once locally (against simulator)
+---
+
+## Usage
+
+### Run one archive pass (demo / local)
 
 ```bash
 python -m ringarchive.run_once
 ```
 
-### 6 — List archived clips
+Output: `archived=N  skipped=M  errors=0`
+
+- **archived** — new clips saved to S3 + recorded in DynamoDB
+- **skipped** — already archived (dedupe working)
+- **errors** — failed downloads (416 = Playground doesn't serve MP4 bytes; expected on simulator)
+
+### List archived clips
 
 ```bash
 python -m ringarchive.list_clips
 ```
 
-### 7 — Deploy to AWS
+Prints event IDs, timestamps, summaries, and 1-hour presigned S3 URLs.
+
+### Start the dashboard UI
+
+```bash
+python -m ringarchive.ui
+# Open http://localhost:5000
+```
+
+Features: unified event+clip table · click any row to play video · export to disk / Dropbox / Drive · bulk select · filter by device and event type.
+
+---
+
+## Deploy to AWS
 
 ```bash
 sam build
 sam deploy --guided
-# Follow prompts; supply Ring credentials as SecureString parameters
 ```
+
+Follow the prompts. Provide your Ring credentials when asked — they are stored in Secrets Manager, never in code or environment variables on Lambda.
+
+---
+
+## Tests
+
+```bash
+pytest
+```
+
+6 tests covering: new-event detection, mark-and-detect, idempotent marking, independent events, list_recent, and summary persistence.
 
 ---
 
 ## How Kiro was used
 
-Kiro was used throughout this project to:
+This project was built during the hackathon window (23 Oct 2026) using **Kiro** as the primary development assistant.
 
-- Research the official Ring Partner API documentation and identify the correct endpoints, auth flow, and required headers (`User-Agent`, `Hardware_Id`).
-- Discover that the originally-planned unofficial `ring-doorbell` library is prohibited by the hackathon rules, and pivot to the official `api.amazonvision.com` REST API.
-- Generate all Python modules (`ring_client.py`, `archiver.py`, `state.py`, `handler.py`) and the SAM `template.yaml`.
-- Write unit tests using `moto` for the DynamoDB dedupe logic.
-- Write this README, the demo script, and the feedback notes.
+- **Specs** — full requirements, design, decisions and tasks are in `.kiro/specs/ring-video-aws-storage/`
+- **Ring App Store Knowledge MCP** — the `ring-appstore-knowledge-mcp-server` MCP (`https://knowledge.appstore-mcp.ring.amazon.dev/mcp`) was connected to verify official API endpoint paths and auth patterns
+- **Code generation** — Kiro wrote all source files, the SAM template, tests and documentation in a single session
+- **Autonomous agents** — Kiro Crew Conductor managed the build sequence: Ring client → archiver → dedupe → SAM → README → UI → export features
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Kaj Alftan.

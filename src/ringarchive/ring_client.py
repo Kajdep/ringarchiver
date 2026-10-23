@@ -1,6 +1,9 @@
 """
 Ring client using the official Amazon Vision API.
 Reads credentials from environment or AWS Secrets Manager.
+
+Access-token-only mode: set RING_ACCESS_TOKEN (no client_id/secret/refresh needed).
+Token refresh is skipped in this mode.
 """
 import json
 import os
@@ -22,16 +25,13 @@ class TokenExpiredError(Exception):
 
 
 def _hardware_id() -> str:
-    """Stable UUID derived from the AWS account ID or a fixed env var."""
     raw = os.environ.get("RING_HARDWARE_ID")
     if raw:
         return raw
-    # Generate and cache in SSM/env is ideal; for simplicity use a fixed namespace UUID.
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, "ringarchive.internal"))
 
 
 def _load_secret(secret_name: str) -> dict:
-    """Load a JSON secret from AWS Secrets Manager."""
     sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "eu-west-2"))
     try:
         resp = sm.get_secret_value(SecretId=secret_name)
@@ -41,7 +41,6 @@ def _load_secret(secret_name: str) -> dict:
 
 
 def _save_secret(secret_name: str, payload: dict) -> None:
-    """Persist updated token payload back to Secrets Manager."""
     sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "eu-west-2"))
     try:
         sm.put_secret_value(SecretId=secret_name, SecretString=json.dumps(payload))
@@ -53,13 +52,15 @@ def _save_secret(secret_name: str, payload: dict) -> None:
 class RingClient:
     """Thin wrapper around the official Ring (Amazon Vision) API."""
 
-    def __init__(self, access_token: str, refresh_token: str, client_id: str,
-                 client_secret: str, secret_name: str | None = None):
+    def __init__(self, access_token: str, refresh_token: str | None = None,
+                 client_id: str | None = None, client_secret: str | None = None,
+                 secret_name: str | None = None):
         self._access_token  = access_token
         self._refresh_token = refresh_token
         self._client_id     = client_id
         self._client_secret = client_secret
-        self._secret_name   = secret_name   # If set, tokens are refreshed back here
+        self._secret_name   = secret_name
+        self._can_refresh   = bool(refresh_token and client_id and client_secret)
         self._session       = requests.Session()
         self._session.headers.update({
             "User-Agent":   APP_NAME,
@@ -67,40 +68,33 @@ class RingClient:
             "Content-Type": "application/json",
         })
 
-    # ------------------------------------------------------------------
-    # Factory
-    # ------------------------------------------------------------------
-
     @classmethod
     def from_env(cls) -> "RingClient":
-        """Build a client from environment variables (local / Lambda)."""
         secret_name = os.environ.get("RING_SECRET_NAME")
         if secret_name:
             creds = _load_secret(secret_name)
         else:
             creds = {
                 "access_token":  os.environ["RING_ACCESS_TOKEN"],
-                "refresh_token": os.environ["RING_REFRESH_TOKEN"],
-                "client_id":     os.environ["RING_CLIENT_ID"],
-                "client_secret": os.environ["RING_CLIENT_SECRET"],
+                "refresh_token": os.environ.get("RING_REFRESH_TOKEN"),
+                "client_id":     os.environ.get("RING_CLIENT_ID"),
+                "client_secret": os.environ.get("RING_CLIENT_SECRET"),
             }
         return cls(
             access_token  = creds["access_token"],
-            refresh_token = creds["refresh_token"],
-            client_id     = creds["client_id"],
-            client_secret = creds["client_secret"],
+            refresh_token = creds.get("refresh_token"),
+            client_id     = creds.get("client_id"),
+            client_secret = creds.get("client_secret"),
             secret_name   = secret_name,
         )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _auth_headers(self) -> dict:
         return {"Authorization": f"Bearer {self._access_token}"}
 
     def _refresh(self) -> None:
-        """Exchange a refresh token for a new access + refresh token pair."""
+        if not self._can_refresh:
+            logger.warning("Token expired and no refresh credentials available.")
+            raise TokenExpiredError("No refresh credentials; get a new access token from the Playground.")
         logger.info("Refreshing Ring access token")
         resp = self._session.post(
             RING_OAUTH_URL,
@@ -139,18 +133,12 @@ class RingClient:
             resp = self._session.post(url, json=body, headers=self._auth_headers(), **kwargs)
         return resp
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def list_devices(self) -> list[dict]:
-        """Return the list of Ring devices authorised for this integration."""
         data = self._get("/v1/devices")
         return data.get("data", [])
 
     def list_events(self, device_id: str, event_types: str = "motion,ding",
                     page_key: str | None = None) -> tuple[list[dict], str | None]:
-        """Return (events, next_page_key) for a device."""
         params: dict = {"event_types": event_types}
         if page_key:
             params["page[key]"] = page_key
@@ -164,11 +152,6 @@ class RingClient:
 
     def download_video(self, device_id: str, timestamp_ms: int,
                        duration_ms: int = 30_000) -> bytes:
-        """
-        Download an MP4 clip starting at timestamp_ms.
-        Returns the raw bytes of the MP4 file.
-        Follows the 303 redirect automatically.
-        """
         body = {
             "timestamp": timestamp_ms,
             "duration":  duration_ms,
