@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: RingArchive - personal Ring clip backup service
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 600
+    MemorySize: 1024
+    Environment:
+      Variables:
+        ARCHIVE_BUCKET:          !Ref ArchiveBucket
+        DYNAMO_TABLE:            !Ref EventTable
+        RING_SECRET_NAME:        !Ref RingSecret
+        AWS_REGION:              !Ref AWS::Region
+        MAX_EVENTS_PER_RUN:      "20"
+        BEDROCK_SUMMARY_ENABLED: "false"
+
+Parameters:
+  RingClientId:
+    Type: String
+    NoEcho: true
+    Description: Ring OAuth client_id from developer portal
+  RingClientSecret:
+    Type: String
+    NoEcho: true
+    Description: Ring OAuth client_secret from developer portal
+  RingAccessToken:
+    Type: String
+    NoEcho: true
+    Description: Initial Ring access_token
+  RingRefreshToken:
+    Type: String
+    NoEcho: true
+    Description: Initial Ring refresh_token
+
+Resources:
+
+  # ── S3 archive bucket ──────────────────────────────────────────────
+  ArchiveBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "ringarchive-${AWS::AccountId}-${AWS::Region}"
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls:       true
+        BlockPublicPolicy:     true
+        IgnorePublicAcls:      true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierAfter90Days
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+
+  # ── DynamoDB dedupe table ──────────────────────────────────────────
+  EventTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: RingArchiveEvents
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: event_id
+          KeyType: HASH
+
+  # ── Secrets Manager secret ─────────────────────────────────────────
+  RingSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: RingArchiveCredentials
+      Description: Ring OAuth tokens for RingArchive
+      SecretString: !Sub |
+        {
+          "client_id":     "${RingClientId}",
+          "client_secret": "${RingClientSecret}",
+          "access_token":  "${RingAccessToken}",
+          "refresh_token": "${RingRefreshToken}"
+        }
+
+  # ── Lambda function ────────────────────────────────────────────────
+  ArchiveLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: RingArchiveLambda
+      CodeUri:      src/
+      Handler:      ringarchive.handler.lambda_handler
+      Description:  Downloads new Ring clips and stores them in S3
+      Events:
+        EveryFifteenMinutes:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(15 minutes)
+            Description:        Archive new Ring clips every 15 minutes
+      Policies:
+        - AmazonS3FullAccess
+        - AmazonDynamoDBFullAccess
+        - AWSSecretsManagerReadWrite
+        - Statement:
+            - Effect:   Allow
+              Action:   bedrock:InvokeModel
+              Resource: "*"
+
+Outputs:
+  BucketName:
+    Value: !Ref ArchiveBucket
+  TableName:
+    Value: !Ref EventTable
+  SecretArn:
+    Value: !Ref RingSecret
+  LambdaArn:
+    Value: !GetAtt ArchiveLambda.Arn

@@ -1,0 +1,12 @@
+.env
+node_modules/
+build/
+dist/
+__pycache__/
+*.py[cod]
+.aws-sam/
+samconfig.toml
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/

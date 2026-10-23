@@ -1,0 +1,32 @@
+[
+  {
+    "Source": "README.md",
+    "Snapshot": "README.md",
+    "SHA256": "164B87009943EBB6B1DBC5E900AC1CE34BE742D2065BBCBA9344A086698AB18E"
+  },
+  {
+    "Source": ".kiro\\specs\\ring-video-aws-storage\\requirements.md",
+    "Snapshot": "requirements.md",
+    "SHA256": "2DDE519420060E301AFFE73D0D3654BA8E066489C9C59AAC3D3CA90017BB2205"
+  },
+  {
+    "Source": ".kiro\\specs\\ring-video-aws-storage\\design.md",
+    "Snapshot": "design.md",
+    "SHA256": "C2B8B33B6C88216ED17AD27DC58001BB64EE6CD0D4F3DB54F3020E40301F7F26"
+  },
+  {
+    "Source": ".kiro\\specs\\ring-video-aws-storage\\tasks.md",
+    "Snapshot": "tasks.md",
+    "SHA256": "7D96780156977C7AF14BB41476009C4F6C70CB600459AF8E3314151CF353A7EE"
+  },
+  {
+    "Source": ".kiro\\specs\\ring-video-aws-storage\\decisions.md",
+    "Snapshot": "decisions.md",
+    "SHA256": "403759E666FB46DC1B22B3B621ACCE540374EC669F70253BD4B0E8985C09FDA8"
+  },
+  {
+    "Source": ".kiro\\specs\\ring-video-aws-storage\\sources.md",
+    "Snapshot": "sources.md",
+    "SHA256": "19796105099B0857DB97041869F5C947FDE8EA2C79C5A491906865388A2A6B52"
+  }
+]

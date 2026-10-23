@@ -1,0 +1,18 @@
+[
+  {
+    "Path": ".kiro/specs/ring-video-aws-storage/original-2026-09-22/design.md",
+    "SHA256": "4168FEF00BEF6DBE6B905A6E191873D2228E001A306D04A3718CE84FD9576179"
+  },
+  {
+    "Path": ".kiro/specs/ring-video-aws-storage/original-2026-09-22/requirements.md",
+    "SHA256": "8890E90DF32EEEA94CD6013E0E6D0A410FAADEFF991B7BBA60BF0F898D4B9AA3"
+  },
+  {
+    "Path": ".kiro/specs/ring-video-aws-storage/original-2026-09-22/tasks.md",
+    "SHA256": "A272CC88444D7F64DD4ADDB6E10CFB55EB8EF349AFF29A4972089176B69A0AFB"
+  },
+  {
+    "Path": ".kiro/settings/mcp.json",
+    "SHA256": "A4882F08CB6AA87E29BD271B18BBAB21E2493FAB1A9E98EDF4DB156B50317485"
+  }
+]
