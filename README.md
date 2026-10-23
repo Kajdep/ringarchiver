@@ -155,4 +155,4 @@ This project was built during the hackathon window (23 Oct 2026) using **Kiro** 
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Kaj Alftan.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Natfla Ltd.
